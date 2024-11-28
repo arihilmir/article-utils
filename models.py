@@ -61,8 +61,26 @@ class CNNLSTM(nn.Module):
     def setup(self) -> None:
         self.additional_layers = [nn.RNN(
             CNNLSTMCell(features=self.hidden_size,
-                        kernel_size=self.kernel_size, padding='same')
+                        kernel_size=self.kernel_size)
         )
+            for _ in range(self.layers)]
+
+    def __call__(self, xs: jax.Array):
+        for l in self.additional_layers:
+            xs = l(xs)
+
+        return xs
+
+
+class CNNGRUNet(nn.Module):
+    hidden_size: int = 150
+    layers: int = 1
+    kernel_size: Sequence[int] = (5,)
+
+    def setup(self) -> None:
+        self.additional_layers = [nn.RNN(
+            CNNGRUCell(features=self.hidden_size,
+                       kernel_size=self.kernel_size))
             for _ in range(self.layers)]
 
     def __call__(self, xs: jax.Array):
@@ -74,82 +92,86 @@ class CNNLSTM(nn.Module):
 
 class CNNLSTMCell(nn.RNNCellBase):
     features: int
-    kernel_size: tp.Sequence[int]
-    padding: int
-    gate_fn: Callable[..., Any] = nn.sigmoid
-    activation_fn: Callable[..., Any] = nn.tanh
-    param_dtype = jnp.float32
+    kernel_size: Sequence[int]
+    strides: Sequence[int] | None = None
+    padding: str | Sequence[tuple[int, int]] = 'SAME'
+    use_bias: bool = True
+    dtype: flax.typing.Dtype | None = None
+    param_dtype: flax.typing.Dtype = jnp.float32
+    carry_init: flax.typing.Initializer = nn.initializers.zeros_init()
 
-    def setup(self):
-        conv_i = partial(
-            nn.Conv,
-            features=self.features,
-            kernel_size=self.kernel_size,
-            padding=self.padding,
-        )
+    @nn.compact
+    def __call__(self, carry, inputs):
+        """Constructs a convolutional LSTM.
 
-        conv_h = partial(
-            nn.Conv,
-            features=self.features,
-            kernel_size=self.kernel_size,
-            padding=self.padding,
-            use_bias=False,
-        )
-
-        self.ii = conv_i()
-        self.if_ = conv_i()
-        self.ig = conv_i()
-        self.io = conv_i()
-        self.hi = conv_h()
-        self.hf = conv_h()
-        self.hg = conv_h()
-        self.ho = conv_h()
-
-    def __call__(self, carry: tuple[jax.Array, jax.Array], inputs: jax.Array) -> tuple[tuple[jax.Array, jax.Array], jax.Array]:
+        Args:
+          carry: the hidden state of the Conv2DLSTM cell,
+            initialized using ``Conv2DLSTM.initialize_carry``.
+          inputs: input data with dimensions (batch, spatial_dims..., features).
+        Returns:
+          A tuple with the new carry and the output.
+        """
         c, h = carry
-        i = self.gate_fn(self.ii(inputs) + self.hi(h))
-        f = self.gate_fn(self.if_(inputs) + self.hf(h))
-        g = self.activation_fn(self.ig(inputs) + self.hg(h))
-        o = self.gate_fn(self.io(inputs) + self.ho(h))
+        input_to_hidden = partial(
+            nn.Conv,
+            features=4 * self.features,
+            kernel_size=self.kernel_size,
+            strides=self.strides,
+            padding=self.padding,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+            name='ih',
+        )
 
-        fc = f * c
-        ig = i * g
-        new_c = fc + ig
-        new_h = o * self.activation_fn(new_c)
+        hidden_to_hidden = partial(
+            nn.Conv,
+            features=4 * self.features,
+            kernel_size=self.kernel_size,
+            strides=self.strides,
+            padding=self.padding,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+            name='hh',
+        )
+
+        gates = input_to_hidden()(inputs) + hidden_to_hidden()(h)
+        i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
+
+        f = nn.sigmoid(f + 1)
+        new_c = f * c + nn.sigmoid(i) * jnp.tanh(g)
+        new_h = nn.sigmoid(o) * jnp.tanh(new_c)
         return (new_c, new_h), new_h
 
-    def initialize_carry(
-        self, rng: flax.typing.PRNGKey, input_shape: tuple[int, ...]
-    ):
-        batch_dims = input_shape[0]
-        c = jnp.zeros((batch_dims, self.features), self.param_dtype)
-        h = jnp.zeros((batch_dims, self.features), self.param_dtype)
-        return (c, h)
+    @nn.nowrap
+    def initialize_carry(self, rng: flax.typing.PRNGKey, input_shape: tuple[int, ...]):
+        """Initialize the RNN cell carry.
+
+        Args:
+          rng: random number generator passed to the init_fn.
+          input_shape: a tuple providing the shape of the input to the cell.
+
+        Returns:
+          An initialized carry for the given RNN cell.
+        """
+        # (*batch_dims, *signal_dims, features)
+        signal_dims = input_shape[-self.num_feature_axes: -1]
+        batch_dims = input_shape[: -self.num_feature_axes]
+        key1, key2 = jax.random.split(rng)
+        mem_shape = batch_dims + signal_dims + (self.features,)
+        c = self.carry_init(key1, mem_shape, self.param_dtype)
+        h = self.carry_init(key2, mem_shape, self.param_dtype)
+        return c, h
 
     @property
     def num_feature_axes(self) -> int:
-        return 1
+        return len(self.kernel_size) + 1
 
 # MARK: - CNNGRU
 
 
-class CNNGRUNet(nn.Module):
-    hidden_size: int = 150
-    layers: int = 1
-    kernel_size: Sequence[int] = (5,)
-
-    def setup(self) -> None:
-        self.additional_layers = [nn.RNN(CNNGRUCell(features=self.hidden_size, kernel_size=self.kernel_size))
-                                  for _ in range(self.layers)]
-
-    def __call__(self, xs: jax.Array):
-        for l in self.additional_layers:
-            xs = l(xs)
-
-        return xs
-
-
-class CNNGRUCell(nn.Module):
+class CNNGRUCell(nn.RNNCellBase):
     features: int = 150
     kernel_size: int = (5,)
     strides: int = 1
@@ -157,59 +179,93 @@ class CNNGRUCell(nn.Module):
     use_bias: bool = False
     dtype = None
     param_dtype = jnp.float32
+    carry_init: flax.typing.Initializer = nn.initializers.zeros_init()
 
     def setup(self):
-        self.dense_i = nn.Conv(
-            features=3*self.features,
-            kernel_size=self.kernel_size,
-            padding=self.padding,
-            use_bias=True,
-            param_dtype=self.param_dtype,
-        )
+        hidden_features = self.features
 
-        self.dense_h = nn.Conv(
-            features=3*self.features,
+        # Convolution layers for gates (input and hidden state)
+        self.gates_i_conv = nn.Conv(
+            features=3 * hidden_features,
             kernel_size=self.kernel_size,
+            strides=self.strides,
+            padding=self.padding,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+            name='gates_i_conv'
+        )
+        self.gates_h_conv = nn.Conv(
+            features=3 * hidden_features,
+            kernel_size=self.kernel_size,
+            strides=self.strides,
             padding=self.padding,
             use_bias=False,
+            dtype=self.dtype,
             param_dtype=self.param_dtype,
+            name='gates_h_conv'
         )
 
-    def __call__(
-        self,
-        carry: tuple[jax.Array, jax.Array],
-        inputs: jax.Array
-    ) -> tuple[tuple[jax.Array, jax.Array], jax.Array]:
+    def __call__(self, carry, inputs):
         h = carry
-        x_transformed = self.dense_i(inputs)
-        h_transformed = self.dense_h(h)
-        xi_r, xi_z, xi_n = jnp.split(x_transformed, 3, axis=-1)
-        hh_r, hh_z, hh_n = jnp.split(h_transformed, 3, axis=-1)
 
         # Compute gates
-        r = nn.sigmoid(xi_r + hh_r)
-        z = nn.sigmoid(xi_z + hh_z)
+        gates_i = self.gates_i_conv(inputs)
+        gates_h = self.gates_h_conv(h)
+        iir, iiz, iin = jnp.split(gates_i, 3, axis=-1)
+        hir, hiz, hin = jnp.split(gates_h, 3, axis=-1)
+        r = nn.sigmoid(iir + hir)
+        z = nn.sigmoid(iiz + hiz)
 
-        # Compute n with an additional linear transformation on h
-        n = nn.tanh(xi_n + r * hh_n)
+        # Compute candidate hidden state
+        n = nn.tanh(iin + r * hin)
 
-        # Update hidden state
+        # Compute new hidden state
         new_h = (1.0 - z) * n + z * h
         return new_h, new_h
 
     def initialize_carry(
         self, rng: flax.typing.PRNGKey, input_shape: tuple[int, ...]
     ):
-        batch_dims = input_shape[0]
-        return jnp.zeros((batch_dims, self.features), self.param_dtype)
+        signal_dims = input_shape[-self.num_feature_axes: -1]
+        batch_dims = input_shape[: -self.num_feature_axes]
+        _, key2 = jax.random.split(rng)
+        mem_shape = batch_dims + signal_dims + (self.features,)
+        return self.carry_init(key2, mem_shape, self.param_dtype)
 
     @property
     def num_feature_axes(self) -> int:
-        return 1
+        return len(self.kernel_size) + 1
 
 # MARK: - CNNRNN
 
-classes = {'gru': GRU, 'lstm': LSTM}
+
+classes = {'gru': GRU, 'lstm': LSTM, 'cnngru': CNNGRUNet, 'cnnlstm': CNNLSTM}
+
+
+class GlobalNet(nn.Module):
+    rnn_cls: str = 'cnngru'
+    hidden_size: int = 150
+    out_features: int = 24
+    kernel_size: Sequence[int] = (5,)
+    layers: int = 1
+
+    @nn.compact
+    def __call__(self, xs: jax.Array):
+        for i in range(self.layers):
+            gru = classes[self.rnn_cls](self.hidden_size, self.kernel_size)
+            carry = self.variable(
+                'state', f'carry{i}', gru.initialize_carry, jax.random.PRNGKey(
+                    0), xs.shape
+            )
+            new_c, out = gru(carry.value, xs)
+            carry.value = new_c
+
+        out = nn.Dense(self.hidden_size)(out[:, -1, :])
+        out = silu(out)
+        out = nn.Dense(self.out_features)(out)
+        return jnp.expand_dims(out, axis=-1)
+
 
 class CNNRNNNet(nn.Module):
     rnn_cls: str
@@ -223,7 +279,7 @@ class CNNRNNNet(nn.Module):
     def __call__(self, x: jax.Array, train=True):
         for _ in range(self.num_blocks - 1):
             x = CNNRNNBlock(self.rnn_cls, self.hidden_size, self.hidden_size, self.kernel_size,
-                            self.layers, False)(x)
+                            self.layers, True)(x)
 
         x = CNNRNNBlock(self.rnn_cls, self.hidden_size, self.out_size, self.kernel_size,
                         self.layers, True)(x)
@@ -260,7 +316,7 @@ class CNNRNNBlock(nn.Module):
 class RNNNet(nn.Module):
     rnn_cls: str
     num_blocks: int = 1
-    hidden_size: int = 150
+    hidden_size: Sequence[int] = (150)
     out_size: int = 24
     layers: int = 1
 
@@ -296,4 +352,3 @@ class RNNBlock(nn.Module):
         x = silu(x)
         x = self.lin2(x)
         return jnp.expand_dims(x, axis=-1)
-

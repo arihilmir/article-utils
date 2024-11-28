@@ -75,6 +75,7 @@ class WindowGenerator():
             batch_size=self.batch_size)
 
         ds = ds.map(self.split_window)
+
         return tfds.as_numpy(ds)
 
     @property
