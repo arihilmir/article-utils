@@ -254,9 +254,11 @@ class TrainerModule:
         if not log_dir:
             base_log_dir = logger_params.get('base_log_dir', 'checkpoints/')
             # Prepare logging
-            log_dir = os.path.join(base_log_dir, self.config["model_class"])
+            log_dir = base_log_dir
             if 'logger_name' in logger_params:
                 log_dir = os.path.join(log_dir, logger_params['logger_name'])
+            else:
+                log_dir = os.path.join(log_dir, self.config["model_class"])
             version = None
         else:
             version = ''
@@ -360,7 +362,7 @@ class TrainerModule:
             peak_value=lr,
             warmup_steps=warmup,
             decay_steps=int(num_epochs * num_steps_per_epoch),
-            end_value=0.01 * lr
+            end_value=0.001 * lr
         )
         # Clip gradients at max value, and evt. apply weight decay
         transf = [optax.clip_by_global_norm(hparams.pop('gradient_clip', 1.0))]
@@ -390,6 +392,7 @@ class TrainerModule:
         else:
             self.train_step = jax.jit(train_step)
             self.eval_step = jax.jit(eval_step)
+            # self.eval_step = eval_step
 
     def create_functions(self) -> Tuple[Callable[[TrainState, Any], Tuple[TrainState, Dict]],
                                         Callable[[TrainState, Any], Tuple[TrainState, Dict]]]:
@@ -415,7 +418,8 @@ class TrainerModule:
                     train_loader : Iterator,
                     val_loader : Iterator,
                     test_loader : Optional[Iterator] = None,
-                    num_epochs : int = 500) -> Dict[str, Any]:
+                    num_epochs : int = 500,
+                    epoch_prefix : int = 0) -> Dict[str, Any]:
         """
         Starts a training loop for the given number of epochs.
 
@@ -436,13 +440,13 @@ class TrainerModule:
         best_eval_metrics = None
         for epoch_idx in self.tracker(range(1, num_epochs+1), desc='Epochs'):
             train_metrics = self.train_epoch(train_loader)
-            self.logger.log_metrics(train_metrics, step=epoch_idx)
+            self.logger.log_metrics(train_metrics, step=epoch_prefix+epoch_idx)
             self.on_training_epoch_end(epoch_idx)
             # Validation every N epochs
             if epoch_idx % self.check_val_every_n_epoch == 0:
                 eval_metrics = self.eval_model(val_loader, log_prefix='val/')
                 self.on_validation_epoch_end(epoch_idx, eval_metrics, val_loader)
-                self.logger.log_metrics(eval_metrics, step=epoch_idx)
+                self.logger.log_metrics(eval_metrics, step=epoch_prefix+epoch_idx)
                 self.save_metrics(f'eval_epoch_{str(epoch_idx).zfill(3)}', eval_metrics)
                 # Save best model
                 if self.is_new_model_better(eval_metrics, best_eval_metrics):
@@ -454,7 +458,7 @@ class TrainerModule:
         if test_loader is not None:
             self.load_model()
             test_metrics = self.eval_model(test_loader, log_prefix='test/')
-            self.logger.log_metrics(test_metrics, step=epoch_idx)
+            self.logger.log_metrics(test_metrics, step=epoch_prefix+epoch_idx)
             self.save_metrics('test', test_metrics)
             best_eval_metrics.update(test_metrics)
         # Close logger
@@ -477,7 +481,7 @@ class TrainerModule:
         metrics = defaultdict(float)
         num_train_steps = len(train_loader)
         start_time = time.time()
-        for batch in self.tracker(train_loader, desc='Training', leave=False):
+        for batch in self.tracker(train_loader, desc='Training', leave=True):
             self.state, step_metrics = self.train_step(self.state, batch)
             for key in step_metrics:
                 metrics['train/' + key] += step_metrics[key] / num_train_steps
@@ -502,13 +506,15 @@ class TrainerModule:
         # Test model on all images of a data loader and return avg loss
         metrics = defaultdict(float)
         num_elements = 0
-        for batch in data_loader:
+        start_time = time.time()
+        for batch in self.tracker(data_loader, desc='Validation', leave=True):
             step_metrics = self.eval_step(self.state, batch)
             batch_size = batch[0].shape[0] if isinstance(batch, (list, tuple)) else batch.shape[0]
             for key in step_metrics:
                 metrics[key] += step_metrics[key] * batch_size
             num_elements += batch_size
         metrics = {(log_prefix + key): (metrics[key] / num_elements).item() for key in metrics}
+        metrics['eval_time'] = time.time() - start_time
         return metrics
 
     def is_new_model_better(self,
@@ -528,11 +534,8 @@ class TrainerModule:
         """
         if old_metrics is None:
             return True
-        for key, is_larger in [('val/val_metric', False), ('val/acc', True), ('val/loss', False)]:
+        for key in ['val/val_metric', 'val/acc', 'val/loss']:
             if key in new_metrics:
-                if is_larger:
-                    return new_metrics[key] > old_metrics[key]
-                else:
                     return new_metrics[key] < old_metrics[key]
         assert False, f'No known metrics to log on: {new_metrics}'
 
