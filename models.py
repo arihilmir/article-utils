@@ -56,12 +56,12 @@ class GRU(nn.Module):
 class CNNLSTM(nn.Module):
     hidden_size: int = 150
     layers: int = 1
-    kernel_size: Sequence[int] = (5,)
+    kernel_size: Sequence[int] = (4,)
 
     def setup(self) -> None:
         self.additional_layers = [nn.RNN(
-            CNNLSTMCell(features=self.hidden_size,
-                        kernel_size=self.kernel_size)
+            nn.ConvLSTMCell(features=self.hidden_size,
+                            kernel_size=self.kernel_size)
         )
             for _ in range(self.layers)]
 
@@ -139,7 +139,7 @@ class CNNLSTMCell(nn.RNNCellBase):
         gates = input_to_hidden()(inputs) + hidden_to_hidden()(h)
         i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
 
-        f = nn.sigmoid(f + 1)
+        f = nn.sigmoid(f)
         new_c = f * c + nn.sigmoid(i) * jnp.tanh(g)
         new_h = nn.sigmoid(o) * jnp.tanh(new_c)
         return (new_c, new_h), new_h
@@ -329,6 +329,23 @@ class RNNNet(nn.Module):
         x = RNNBlock(self.rnn_cls, self.hidden_size, self.out_size,
                      self.layers, True)(x)
         return x
+
+class BatchNet(nn.Module):
+    rnn_cls: str
+    num_blocks: int = 1
+    hidden_size: Sequence[int] = (150)
+    out_size: int = 24
+    layers: int = 1
+
+    @nn.compact
+    def __call__(self, xs, train=True):
+        pc_xs, w_xs = jnp.split(xs, [1], axis=-1)
+        pc_xs = RNNBlock(self.rnn_cls, hidden_size=self.hidden_size, out_size=self.hidden_size, single_out=True)(pc_xs)
+        w_xs = RNNBlock(self.rnn_cls, hidden_size=self.hidden_size, out_size=self.hidden_size, single_out=True)(w_xs)
+
+        xs = jnp.concatenate([pc_xs, w_xs], axis=-1)
+        xs = RNNBlock(self.rnn_cls, hidden_size=self.hidden_size, out_size=self.out_size, single_out=True)(xs)
+        return xs
 
 
 class RNNBlock(nn.Module):

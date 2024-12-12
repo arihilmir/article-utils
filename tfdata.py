@@ -14,14 +14,21 @@ class WindowGenerator():
         files_path,
         cols=['Value', 'feels_like', 'pressure', 'wind_speed'],
         batch_size=8,
-        train_part = 0.5
+        train_part = 0.5,
+        partial_dataset=False
     ):
         # Store the raw data.
-        self.training_data = pd.read_parquet(files_path / 'training_data.parquet')[cols]
+        self.training_data = pd.read_parquet(files_path / 'train_data.parquet')[cols]
         split_pos = int(len(self.training_data) * train_part)
+
+        if partial_dataset:
+            self.training_data = self.training_data.iloc[:350]
+            split_pos = int(len(self.training_data) * train_part)
+
         self.train_df = self.training_data.iloc[:split_pos]
         self.val_df = self.training_data.iloc[split_pos:]
-        self.test_df = pd.read_parquet(files_path / 'test_pc.parquet')[cols]
+
+        self.test_df = pd.read_parquet(files_path / 'test_data.parquet')[cols]
         self.batch_size = batch_size
 
         # Work out the label column indices.
@@ -76,7 +83,8 @@ class WindowGenerator():
 
         ds = ds.map(self.split_window)
 
-        return tfds.as_numpy(ds)
+        # return tfds.as_numpy(ds)
+        return ds
 
     @property
     def train(self):

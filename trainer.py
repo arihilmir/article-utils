@@ -22,156 +22,6 @@ import torch.utils.data as data
 from torch.utils.tensorboard import SummaryWriter
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
-
-
-# class TrainerModule:
-
-#     def __init__(self, module, model_name, exmp_batch, max_iters, lr=1e-3, warmup=100, seed=42, checkpoint_path='./checkpoints', **model_kwargs):
-#         """
-#         Inputs:
-#             model_name - Name of the model. Used for saving and checkpointing
-#             exmp_batch - Example batch to the model for initialization
-#             max_iters - Number of maximum iterations the model is trained for. This is needed for the CosineWarmup scheduler
-#             lr - Learning rate in the optimizer
-#             warmup - Number of warmup steps. Usually between 50 and 500
-#             seed - Seed to use for model init
-#         """
-#         super().__init__()
-#         self.model_name = model_name
-#         self.max_iters = max_iters
-#         self.lr = lr
-#         self.warmup = warmup
-#         self.seed = seed
-#         self.checkpoint_path = checkpoint_path
-#         # Create empty model. Note: no parameters yet
-#         self.model = module(**model_kwargs)
-#         # Prepare logging
-#         self.log_dir = os.path.join(checkpoint_path, self.model_name)
-#         self.logger = SummaryWriter(log_dir=self.log_dir)
-#         # Create jitted training and eval functions
-#         self.create_functions()
-#         # Initialize model
-#         self.init_model(exmp_batch)
-
-#     def batch_to_input(self, exmp_batch):
-#         # Map batch to input data to the model
-#         # To be implemented in a task specific sub-class
-#         return exmp_batch[0]
-
-#     def get_loss_function(self):
-#         # Return a function that calculates the loss for a batch
-#         # To be implemented in a task specific sub-class
-#         def calculate_loss(params, batch):
-#             inputs, targets = batch
-#             predictions = self.state.apply_fn({'params': params}, inputs)
-#             loss = optax.squared_error(predictions, targets).mean()
-#             acc = jnp.abs(predictions - targets).mean()
-#             return loss, acc
-#         return calculate_loss
-
-#     def create_functions(self):
-#         # Create jitted train and eval functions
-#         calculate_loss = self.get_loss_function()
-
-#         # Training function
-#         def train_step(state, batch):
-#             def loss_fn(params): return calculate_loss(params, batch)
-#             ret, grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-#             loss, acc = ret[0], ret[1]
-#             state = state.apply_gradients(grads=grads)
-#             return state, loss, acc
-#         self.train_step = jax.jit(train_step)
-
-#         # Evaluation function
-#         def eval_step(state, batch):
-#             _, acc = calculate_loss(state.params, batch)
-#             return acc
-#         self.eval_step = jax.jit(eval_step)
-
-#     def init_model(self, exmp_batch):
-#         # Initialize model
-#         self.rng = jax.random.PRNGKey(self.seed)
-#         self.rng, init_rng, dropout_init_rng = jax.random.split(self.rng, 3)
-#         exmp_input = self.batch_to_input(exmp_batch)
-#         params = self.model.init(
-#             {'params': init_rng, 'dropout': dropout_init_rng}, exmp_input)['params']
-#         # Initialize learning rate schedule and optimizer
-#         lr_schedule = optax.warmup_cosine_decay_schedule(
-#             init_value=0.0,
-#             peak_value=self.lr,
-#             warmup_steps=self.warmup,
-#             decay_steps=self.max_iters,
-#             end_value=0.0
-#         )
-#         optimizer = optax.chain(
-#             optax.clip_by_global_norm(1.0),  # Clip gradients at norm 1
-#             optax.adam(lr_schedule)
-#         )
-#         # Initialize training state
-#         self.state = train_state.TrainState.create(
-#             apply_fn=self.model.apply, params=params, tx=optimizer)
-
-#     def train_model(self, train_loader, val_loader, num_epochs=20):
-#         # Train model for defined number of epochs
-#         best_acc = 0.0
-#         for epoch_idx in tqdm(range(1, num_epochs+1)):
-#             self.train_epoch(train_loader, epoch=epoch_idx)
-#             if epoch_idx % 5 == 0:
-#                 eval_acc = self.eval_model(val_loader)
-#                 self.logger.add_scalar(
-#                     'val/accuracy', eval_acc, global_step=epoch_idx)
-#                 if eval_acc <= best_acc:
-#                     best_acc = eval_acc
-#                     self.save_model(step=epoch_idx)
-#                 self.logger.flush()
-
-#     def train_epoch(self, train_loader, epoch):
-#         # Train model for one epoch, and log avg loss and accuracy
-#         accs, losses = [], []
-#         idx = epoch*len(train_loader)
-#         for batch in tqdm(train_loader, desc='Training', leave=True):
-#             self.state, loss, accuracy = self.train_step(self.state, batch)
-#             losses.append(loss)
-#             accs.append(accuracy)
-#             self.logger.add_scalar('train/step_loss', jax.device_get(loss), global_step=idx)
-#             self.logger.add_scalar('train/step_accuracy', jax.device_get(accuracy), global_step=idx)
-#             idx+=1
-
-#         avg_loss = np.stack(jax.device_get(losses)).mean()
-#         avg_acc = np.stack(jax.device_get(accs)).mean()
-#         self.logger.add_scalar('train/loss', avg_loss, global_step=epoch)
-#         self.logger.add_scalar('train/accuracy', avg_acc, global_step=epoch)
-
-#     def eval_model(self, data_loader):
-#         # Test model on all data points of a data loader and return avg accuracy
-#         correct_class, count = 0, 0
-#         for batch in data_loader:
-#             acc, self.rng = self.eval_step(self.state, self.rng, batch)
-#             correct_class += acc * batch[0].shape[0]
-#             count += batch[0].shape[0]
-#         eval_acc = (correct_class / count).item()
-#         return eval_acc
-
-#     def save_model(self, step=0):
-#         # Save current model at certain training iteration
-#         checkpoints.save_checkpoint(
-#             ckpt_dir=self.log_dir, target=self.state.params, step=step)
-
-#     def load_model(self, pretrained=False):
-#         # Load model. We use different checkpoint for the pretrained model
-#         if not pretrained:
-#             params = checkpoints.restore_checkpoint(
-#                 ckpt_dir=self.log_dir, target=self.state.params)
-#         else:
-#             params = checkpoints.restore_checkpoint(ckpt_dir=os.path.join(
-#                 self.checkpoint_path, f'{self.model_name}.ckpt'), target=self.state.params)
-#         self.state = train_state.TrainState.create(
-#             apply_fn=self.model.apply, params=params, tx=self.state.tx)
-
-#     def checkpoint_exists(self):
-#         # Check whether a pretrained model exist for this Transformer
-#         return os.path.isfile(os.path.join(self.checkpoint_path, f'{self.model_name}.ckpt'))
-
 class TrainState(train_state.TrainState):
     # A simple extension of TrainState to also include batch statistics
     # If a model has no batch statistics, it is None
@@ -349,29 +199,28 @@ class TrainerModule:
             opt_class = optax.adam
         elif optimizer_name.lower() == 'adamw':
             opt_class = optax.adamw
-        elif optimizer_name.lower() == 'sgd':
-            opt_class = optax.sgd
         else:
             assert False, f'Unknown optimizer "{opt_class}"'
         # Initialize learning rate scheduler
         # A cosine decay scheduler is used, but others are also possible
         lr = hparams.pop('lr', 1e-3)
-        warmup = hparams.pop('warmup', 0)
-        lr_schedule = optax.warmup_cosine_decay_schedule(
-            init_value=0.0,
-            peak_value=lr,
-            warmup_steps=warmup,
-            decay_steps=int(num_epochs * num_steps_per_epoch),
-            end_value=0.001 * lr
-        )
-        # Clip gradients at max value, and evt. apply weight decay
-        transf = [optax.clip_by_global_norm(hparams.pop('gradient_clip', 1.0))]
-        if opt_class == optax.sgd and 'weight_decay' in hparams:  # wd is integrated in adamw
-            transf.append(optax.add_decayed_weights(hparams.pop('weight_decay', 0.0)))
-        optimizer = optax.chain(
-            *transf,
-            opt_class(lr_schedule, **hparams)
-        )
+        # warmup = hparams.pop('warmup', 0)
+        # lr_schedule = optax.warmup_cosine_decay_schedule(
+        #     init_value=0.0,
+        #     peak_value=lr,
+        #     warmup_steps=warmup,
+        #     decay_steps=int(num_epochs * num_steps_per_epoch),
+        #     end_value=0.001 * lr
+        # )
+        # # Clip gradients at max value, and evt. apply weight decay
+        # transf = [optax.clip_by_global_norm(hparams.pop('gradient_clip', 1.0))]
+        # if opt_class == optax.sgd and 'weight_decay' in hparams:  # wd is integrated in adamw
+        #     transf.append(optax.add_decayed_weights(hparams.pop('weight_decay', 0.0)))
+        # optimizer = optax.chain(
+        #     *transf,
+        #     opt_class(lr_schedule, **hparams)
+        # )
+        optimizer = optax.adam(lr)
         # Initialize training state
         self.state = TrainState.create(apply_fn=self.state.apply_fn,
                                        params=self.state.params,
@@ -416,7 +265,7 @@ class TrainerModule:
 
     def train_model(self,
                     train_loader : Iterator,
-                    val_loader : Iterator,
+                    val_loader : Optional[Iterator] = None,
                     test_loader : Optional[Iterator] = None,
                     num_epochs : int = 500,
                     epoch_prefix : int = 0) -> Dict[str, Any]:
@@ -443,7 +292,7 @@ class TrainerModule:
             self.logger.log_metrics(train_metrics, step=epoch_prefix+epoch_idx)
             self.on_training_epoch_end(epoch_idx)
             # Validation every N epochs
-            if epoch_idx % self.check_val_every_n_epoch == 0:
+            if epoch_idx % self.check_val_every_n_epoch == 0 and val_loader is not None:
                 eval_metrics = self.eval_model(val_loader, log_prefix='val/')
                 self.on_validation_epoch_end(epoch_idx, eval_metrics, val_loader)
                 self.logger.log_metrics(eval_metrics, step=epoch_prefix+epoch_idx)
@@ -454,6 +303,8 @@ class TrainerModule:
                     best_eval_metrics.update(train_metrics)
                     self.save_model(step=epoch_idx)
                     self.save_metrics('best_eval', eval_metrics)
+            else:
+              best_eval_metrics = train_metrics
         # Test best model if possible
         if test_loader is not None:
             self.load_model()
@@ -534,7 +385,7 @@ class TrainerModule:
         """
         if old_metrics is None:
             return True
-        for key in ['val/val_metric', 'val/acc', 'val/loss']:
+        for key in ['val/loss', 'val/acc']:
             if key in new_metrics:
                     return new_metrics[key] < old_metrics[key]
         assert False, f'No known metrics to log on: {new_metrics}'
