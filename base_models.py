@@ -2,7 +2,7 @@ import keras
 from keras import ops
 from keras import layers as l
 
-def lstm_block(hidden_size, layers, out_size=24, input_shape=(72, 4)):
+def gru_block(hidden_size, layers, out_size=24, input_shape=(72, 4)):
     model = keras.Sequential()
     model.add(l.Input(input_shape))
     for _ in range(layers-1):
