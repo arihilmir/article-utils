@@ -2,7 +2,7 @@ import keras
 from keras import ops
 from keras import layers as l
 
-def gru_block(hidden_size, layers, out_size=24, input_shape=(72, 4)):
+def gru_block(hidden_size, layers, out_size=24, input_shape=(72, 4), bsz=4):
     model = keras.Sequential()
     model.add(l.Input(input_shape))
     for _ in range(layers-1):
@@ -12,7 +12,7 @@ def gru_block(hidden_size, layers, out_size=24, input_shape=(72, 4)):
     model.add(l.Dense(out_size, activation='silu'))
     return model
 
-def get_big_model(num_units, num_layers):
+def get_big_model(num_units, num_layers, out_size=24, input_shape=(72, 4), bsz=4):
     model = keras.Sequential()
     model.add(l.Input((72, 4), batch_size=4))
 
@@ -22,13 +22,6 @@ def get_big_model(num_units, num_layers):
     model.add(l.GRU(num_units))
     model.add(l.Dense(64, activation='silu'))
     model.add(l.Dense(24))
-
-    model.compile(loss=keras.losses.MeanSquaredError(),
-                  optimizer=keras.optimizers.Adam(learning_rate=0.0005),
-                  metrics=[keras.metrics.MeanAbsolutePercentageError(),
-                           keras.metrics.RootMeanSquaredError(),
-                           keras.metrics.R2Score()])
-
     return model
 
 def separated_model(hidden_size, layers, out_size=24, input_shape=(72, 4), bsz=4):

@@ -83,7 +83,6 @@ class WindowGenerator():
 
         ds = ds.map(self.split_window)
 
-        # return tfds.as_numpy(ds)
         return ds
 
     @property
