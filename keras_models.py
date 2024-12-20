@@ -6,6 +6,7 @@ import keras_tuner as kt
 from functools import partial
 from keras import backend as K
 
+
 def standardize_tuple(value, n, name, allow_zero=False):
     """Transforms non-negative/positive integer/integers into an integer tuple.
 
@@ -141,6 +142,7 @@ def compute_conv_output_shape(
             input_shape[0], kernel_shape[-1]) + output_spatial_shape
     return output_shape
 
+
 def standardize_data_format(data_format):
     if data_format is None:
         return keras.backend.image_data_format()
@@ -152,6 +154,7 @@ def standardize_data_format(data_format):
             f"Received: data_format={data_format}"
         )
     return data_format
+
 
 class ConvGRUCell(layers.Layer):
     def __init__(
@@ -276,43 +279,31 @@ class ConvGRUCell(layers.Layer):
         self.built = True
 
     def call(self, inputs, states, training=False):
-        h_tm1 = states[0]  # Previous memory state
+        # Extract the previous hidden state
+        # Expected shape: (batch_size, spatial_dims, filters)
+        h_tm1 = states[0]
 
-        inputs_z = inputs
-        inputs_r = inputs
-        inputs_h = inputs
+        print(self.kernel)
+        # Compute inputs and hidden state projections in one step
+        matrix_x = self.input_conv(
+            inputs, self.kernel, self.bias, padding=self.padding)
+        x_z, x_r, x_h = ops.split(matrix_x, 3, axis=-1)
 
-        h_tm1_z = h_tm1
-        h_tm1_r = h_tm1
-        h_tm1_h = h_tm1
+        matrix_inner = self.recurrent_conv(h_tm1, self.recurrent_kernel)
+        recurrent_z, recurrent_r, recurrent_h = ops.split(
+            matrix_inner, 3, axis=-1)
 
-        (kernel_z, kernel_r, kernel_h) = ops.split(
-            self.kernel, 3, axis=self.rank + 1
-        )
-        (
-            recurrent_kernel_z,
-            recurrent_kernel_r,
-            recurrent_kernel_h,
-        ) = ops.split(self.recurrent_kernel, 3, axis=self.rank + 1)
+        # Update and reset gates
+        z = self.recurrent_activation(x_z + recurrent_z)
+        r = self.recurrent_activation(x_r + recurrent_r)
 
-        if self.use_bias:
-            bias_z, bias_r, bias_h = ops.split(self.bias, 3)
-        else:
-            bias_z, bias_r, bias_h = None, None, None
+        # Candidate hidden state
+        hh = self.activation(x_h + r * recurrent_h)
 
-        x_z = self.input_conv(inputs_z, kernel_z, bias_z, padding=self.padding)
-        x_r = self.input_conv(inputs_r, kernel_r, bias_r, padding=self.padding)
-        x_h = self.input_conv(inputs_h, kernel_h, bias_h, padding=self.padding)
-
-        h_z = self.recurrent_conv(h_tm1_z, recurrent_kernel_z)
-        h_r = self.recurrent_conv(h_tm1_r, recurrent_kernel_r)
-        h_h = self.recurrent_conv(h_tm1_h, recurrent_kernel_h)
-
-        z = self.recurrent_activation(x_z + h_z)
-        r = self.recurrent_activation(x_r + h_r)
-        hh = self.activation(x_h + r * h_h)
-
+        # Compute the new hidden state
         h = z * h_tm1 + (1 - z) * hh
+
+        # Return the new hidden state and updated states
         return h, [h]
 
     def compute_output_shape(self, inputs_shape, states_shape=None):
@@ -336,29 +327,28 @@ class ConvGRUCell(layers.Layer):
         return [ops.zeros(state_shape, dtype=self.compute_dtype)]
 
     def input_conv(self, x, w, b=None, padding="valid"):
+        # Adjusted for rank-1 to handle 1D convolutions correctly
         conv_out = ops.conv(
             x,
             w,
             strides=self.strides,
             padding=padding,
-            data_format=self.data_format,
+            data_format="channels_last",  # Enforce channels_last for rank-1 inputs
             dilation_rate=self.dilation_rate,
         )
         if b is not None:
-            if self.data_format == "channels_last":
-                bias_shape = (1,) * (self.rank + 1) + (self.filters,)
-            else:
-                bias_shape = (1, self.filters) + (1,) * self.rank
-            bias = ops.reshape(b, bias_shape)
-            conv_out += bias
+            bias_shape = (1, 1, self.filters * 3)  # Adjust bias shape for 1D
+            b = ops.reshape(b, bias_shape)
+            conv_out += b
         return conv_out
 
     def recurrent_conv(self, x, w):
+        # Adjusted for rank-1 to support 1D convolutions
         strides = standardize_tuple(
             1, self.rank, "strides", allow_zero=True
         )
         conv_out = ops.conv(
-            x, w, strides=strides, padding="same", data_format=self.data_format
+            x, w, strides=strides, padding="same", data_format="channels_last"
         )
         return conv_out
 
@@ -400,6 +390,7 @@ class ConvGRUCell(layers.Layer):
         }
         base_config = super().get_config()
         return {**base_config, **config}
+
 
 class ConvGRU(layers.RNN):
     def __init__(
