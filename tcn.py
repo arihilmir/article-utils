@@ -297,7 +297,6 @@ class TCN(Layer):
                 self.residual_blocks[-1].build(self.build_output_shape)
                 self.build_output_shape = self.residual_blocks[-1].res_output_shape
 
-        print(f'self.build_output_shape: {type(self.build_output_shape)}')
         # this is done to force keras to add the layers in the list to self._layers
         for layer in self.residual_blocks:
             self.__setattr__(layer.name, layer)
@@ -314,7 +313,6 @@ class TCN(Layer):
         else:
             self.output_slice_index = -1  # causal case.
 
-        print(f'self.build_output_shape: {type(self.build_output_shape)}')
         self.slicer_layer = Lambda(lambda tt: tt[:, self.output_slice_index, :], name='Slice_Output')
         self.slicer_layer.build([*self.build_output_shape])
 

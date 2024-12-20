@@ -2,7 +2,6 @@ import keras
 from keras import layers
 from keras import ops
 import numpy as np
-import keras_tuner as kt
 from functools import partial
 from keras import backend as K
 
