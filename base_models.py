@@ -75,7 +75,7 @@ def tcn_gru_block(
     input_shape: tuple[int, int] = (72, 4),
     bsz: int = 4
 ):
-    i = l.Input(shape=input_shape, batch_size=bsz)
+    i = l.Input(shape=input_shape)
     o = TCN(
         nb_filters=nb_filters,
         kernel_size=kernel_size,
@@ -84,14 +84,14 @@ def tcn_gru_block(
         return_sequences=True,
         activation=activation
     )(i)
-    o = l.GRU(gru_units, stateful=True)(o)
+    o = l.GRU(gru_units)(o)
     o = l.Dense(out_size, activation='silu')(o)
     o = l.Reshape((out_size, 1))(o)
     return keras.Model(i, o)
 
 
 def tcn_ensemble(models_paths: list[str], input_shape=(72, 4), bsz=4):
-    inputs = l.Input(input_shape, batch_size=bsz)
+    inputs = l.Input(input_shape)
     models = [keras.saving.load_model(path) for path in models_paths]
     for j in range(len(models)):
         m = models[j]
