@@ -70,7 +70,7 @@ def tcn_gru_block(
     nb_stacks: int,
     dilations: list[int],
     gru_units: int = 128,
-    activation: str = 'relu',
+    activation: str = 'silu',
     out_size: int = 24,
     input_shape: tuple[int, int] = (72, 4),
     bsz: int = 4
@@ -82,9 +82,9 @@ def tcn_gru_block(
         nb_stacks=nb_stacks,
         dilations=dilations,
         return_sequences=True,
-        activation='relu'
+        activation=activation
     )(i)
-    o = l.GRU(gru_units, recurrent_activation='silu', stateful=True)(o)
+    o = l.GRU(gru_units, stateful=True)(o)
     o = l.Dense(out_size, activation='silu')(o)
     o = l.Reshape((out_size, 1))(o)
     return keras.Model(i, o)
