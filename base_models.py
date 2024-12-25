@@ -84,13 +84,14 @@ def tcn_gru_block(
         return_sequences=True,
         activation=activation
     )(i)
-    o = l.GRU(gru_units)(o)
+    o = l.Flatten()(o)
+    # o = l.GRU(gru_units)(o)
     o = l.Dense(out_size, activation='silu')(o)
     o = l.Reshape((out_size, 1))(o)
     return keras.Model(i, o)
 
 
-def tcn_ensemble(models_paths: list[str], input_shape=(72, 4), bsz=4):
+def tcn_ensemble(models_paths: list[str], gru_size=64, input_shape=(72, 4), bsz=4):
     inputs = l.Input(input_shape)
     models = [keras.saving.load_model(path) for path in models_paths]
     for j in range(len(models)):
@@ -101,9 +102,11 @@ def tcn_ensemble(models_paths: list[str], input_shape=(72, 4), bsz=4):
             m.layers[i].trainable = False
 
     separate_outputs = [m(inputs) for m in models]
-    merge = l.Concatenate()(separate_outputs)
-    out = l.GRU(128, name='stacking_gru')(merge)
-    out = l.Dense(128, activation='silu', name='stacking_dense_1')(out)
+    for so in separate_outputs:
+        print(so.shape)
+    merge = l.Concatenate(axis=-1)(separate_outputs)
+    out = l.GRU(gru_size, name='stacking_gru')(merge)
+    out = l.Dense(64, activation='silu', name='stacking_dense_1')(out)
     out = l.Dense(24, name='stacking_dense_2')(out)
-    model = keras.Model(inputs=inputs, outputs=out, name="Stacking")
-    return model
+    out = l.Reshape((24, 1))(out)
+    return keras.Model(inputs=inputs, outputs=out)
