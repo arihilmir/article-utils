@@ -93,7 +93,7 @@ def tcn_gru_block(
 
 def tcn_ensemble(models_paths: list[str], gru_size=64, input_shape=(72, 4), bsz=4):
     inputs = l.Input(input_shape)
-    models = [keras.saving.load_model(path) for path in models_paths]
+    models = [keras.saving.load_model(path, compile=False) for path in models_paths]
     for j in range(len(models)):
         m = models[j]
         m.name = f'block_{j}_' + m.name
