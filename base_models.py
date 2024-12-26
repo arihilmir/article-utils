@@ -4,6 +4,7 @@ from keras import layers as l
 
 from .tcn import TCN
 
+
 def gru_block(hidden_size, layers, out_size=24, input_shape=(72, 4), bsz=4):
     model = keras.Sequential()
     model.add(l.Input(input_shape))
@@ -64,6 +65,7 @@ def stacking_model(models_paths: list[str], input_shape=(72, 4), bsz=4):
 
 # MARK: TCN
 
+
 def tcn_gru_block(
     nb_filters: int,
     kernel_size: int,
@@ -93,7 +95,8 @@ def tcn_gru_block(
 
 def tcn_ensemble(models_paths: list[str], gru_size=64, input_shape=(72, 4), bsz=4):
     inputs = l.Input(input_shape)
-    models = [keras.saving.load_model(path, compile=False) for path in models_paths]
+    models = [keras.saving.load_model(path, compile=False)
+              for path in models_paths]
     for j in range(len(models)):
         m = models[j]
         m.name = f'block_{j}_' + m.name
@@ -109,4 +112,21 @@ def tcn_ensemble(models_paths: list[str], gru_size=64, input_shape=(72, 4), bsz=
     out = l.Dense(64, activation='silu', name='stacking_dense_1')(out)
     out = l.Dense(24, name='stacking_dense_2')(out)
     out = l.Reshape((24, 1))(out)
+    return keras.Model(inputs=inputs, outputs=out)
+
+
+def tcn_attn_ensemble(models_paths: list[str], input_shape=(72, 4), bsz=4):
+    inputs = l.Input(input_shape)
+    models = [keras.saving.load_model(path, compile=False)
+              for path in models_paths]
+    for j in range(len(models)):
+        m = models[j]
+        m.name = f'block_{j}_' + m.name
+        for i in range(len(m.layers)):
+            m.layers[i].name = f'model{i}_' + m.layers[i].name
+            m.layers[i].trainable = False
+
+    separate_outputs = [m(inputs) for m in models]
+    out = l.MultiHeadAttention(num_heads=8, key_dim=1)(separate_outputs[0], separate_outputs[1])
+    out = l.Dense(24, name='stacking_dense_2', activation='silu')(out)
     return keras.Model(inputs=inputs, outputs=out)
