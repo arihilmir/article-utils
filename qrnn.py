@@ -125,9 +125,6 @@ class QRNN(Layer):
             kwargs['input_shape'] = (self.input_length, self.input_dim)
 
     def build(self, input_shape):
-        if isinstance(input_shape, list):
-            input_shape = input_shape[0]
-
         batch_size = input_shape[0] if self.stateful else None
         self.input_dim = input_shape[2]
         self.input_spec = InputSpec(shape=(batch_size, None, self.input_dim))
@@ -389,5 +386,5 @@ class QRNN(Layer):
             'input_length': self.input_length,
         }
         base_config = super(QRNN, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
+        return {**base_config, **config}
 
