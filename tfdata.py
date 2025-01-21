@@ -12,13 +12,16 @@ class WindowGenerator():
         label_width,
         shift,
         files_path,
+        train_file_name = 'train_data.parquet',
+        test_file_name = 'test_data.parquet',
         cols=['Value', 'feels_like', 'pressure', 'wind_speed'],
+        label_col = 'Value',
         batch_size=8,
         train_part = 0.5,
         partial_dataset=False
     ):
         # Store the raw data.
-        self.training_data = pd.read_parquet(files_path / 'train_data.parquet')[cols]
+        self.training_data = pd.read_parquet(files_path / train_file_name)[cols]
         split_pos = int(len(self.training_data) * train_part)
 
         if partial_dataset:
@@ -28,11 +31,11 @@ class WindowGenerator():
         self.train_df = self.training_data.iloc[:split_pos]
         self.val_df = self.training_data.iloc[split_pos:]
 
-        self.test_df = pd.read_parquet(files_path / 'test_data.parquet')[cols]
+        self.test_df = pd.read_parquet(files_path / test_file_name)[cols]
         self.batch_size = batch_size
 
         # Work out the label column indices.
-        self.label_columns = ['Value']
+        self.label_columns = [label_col]
         if cols is not None:
             self.label_columns_indices = {name: i for i, name in
                                           enumerate(cols)}
