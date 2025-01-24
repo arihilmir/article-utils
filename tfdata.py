@@ -20,7 +20,11 @@ class WindowGenerator():
         train_part = 0.5,
         partial_dataset=False
     ):
+        self.extract_labels = False
         # Store the raw data.
+        if label_col not in cols:
+            cols.append(label_col)
+            self.extract_labels = True
         self.training_data = pd.read_parquet(files_path / train_file_name)[cols]
         split_pos = int(len(self.training_data) * train_part)
 
@@ -59,7 +63,8 @@ class WindowGenerator():
             self.labels_slice]
 
     def split_window(self, features):
-        inputs = features[:, self.input_slice, :]
+        last_elment = -1 if self.extract_labels else len(self.train_df.columns)
+        inputs = features[:, self.input_slice, :last_elment]
         labels = features[:, self.labels_slice, :]
         if self.label_columns is not None:
             labels = tf.stack(
